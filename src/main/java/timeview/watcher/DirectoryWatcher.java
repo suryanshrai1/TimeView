@@ -25,20 +25,7 @@ public class DirectoryWatcher {
     private final Set<String> eventTrigger = Collections.synchronizedSet(new HashSet<>());
     private Map<String, Boolean> previousSnapshot = new HashMap<>(); // name -> isDirectory
 
-    private static class FileEvent {
-        final WatchEvent.Kind<?> kind;
-        final String name;
-        final boolean isDirectory;
-        final LocalDateTime time;
-        FileEvent(WatchEvent.Kind<?> kind, String name, boolean isDirectory, LocalDateTime time) {
-            this.kind = kind;
-            this.name = name;
-            this.isDirectory = isDirectory;
-            this.time = time;
-        }
-    }
-
-    private static final long RENAME_WINDOW_MS = 3000;
+    private static final String SNAPSHOT_DIR_NAME = ".time_machine";
 
     public DirectoryWatcher(Path folder, ChangeListener listener) {
         this.folder = folder;
@@ -57,7 +44,6 @@ public class DirectoryWatcher {
             }
         }, BATCH_WINDOW_MS, BATCH_WINDOW_MS);
         executor.submit(this::processEvents);
-        // Take initial snapshot
         previousSnapshot = scanDirectory();
     }
 
@@ -77,9 +63,15 @@ public class DirectoryWatcher {
             while (running) {
                 WatchKey key = watchService.take();
                 for (WatchEvent<?> event : key.pollEvents()) {
-                    Path changed = folder.resolve((Path) event.context());
-                    String fileName = changed.getFileName().toString();
-                    eventTrigger.add(fileName);
+                    Path changedRelative = (Path) event.context();
+                    Path changedFull = folder.resolve(changedRelative);
+
+                    // Skip anything inside .time_machine
+                    if (changedRelative.toString().startsWith(SNAPSHOT_DIR_NAME)) {
+                        continue;
+                    }
+
+                    eventTrigger.add(changedRelative.toString());
                 }
                 key.reset();
             }
@@ -93,6 +85,7 @@ public class DirectoryWatcher {
         File[] files = folder.toFile().listFiles();
         if (files != null) {
             for (File f : files) {
+                if (f.getName().equals(SNAPSHOT_DIR_NAME)) continue; // skip .time_machine
                 snapshot.put(f.getName(), f.isDirectory());
             }
         }
@@ -100,16 +93,16 @@ public class DirectoryWatcher {
     }
 
     private void processSnapshotDiff() {
-        if (eventTrigger.isEmpty()) return; // No changes detected
+        if (eventTrigger.isEmpty()) return;
         Map<String, Boolean> currentSnapshot = scanDirectory();
         Set<String> prevNames = new HashSet<>(previousSnapshot.keySet());
         Set<String> currNames = new HashSet<>(currentSnapshot.keySet());
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
         LocalDateTime now = LocalDateTime.now();
+
         // Detect deletes and renames
         for (String oldName : prevNames) {
             if (!currNames.contains(oldName)) {
-                // Try to find a rename (same type, new name)
                 String renamedTo = null;
                 for (String newName : currNames) {
                     if (!previousSnapshot.containsKey(newName)
@@ -120,28 +113,31 @@ public class DirectoryWatcher {
                 }
                 if (renamedTo != null) {
                     listener.onChange("[" + now.format(formatter) + "] RENAME: " + oldName + " -> " + renamedTo);
-                    currNames.remove(renamedTo); // Don't double-log as create
+                    currNames.remove(renamedTo);
                 } else {
                     listener.onChange("[" + now.format(formatter) + "] DELETE: " + oldName);
                 }
             }
         }
+
         // Detect creates
         for (String newName : currNames) {
             if (!previousSnapshot.containsKey(newName)) {
                 listener.onChange("[" + now.format(formatter) + "] CREATE: " + newName);
             }
         }
+
         previousSnapshot = currentSnapshot;
         eventTrigger.clear();
     }
 
+    // Optional stubs for future use
     private void checkForRenameOrCreate(String createName, DateTimeFormatter formatter) {
-        // Remove all references to EventRecord, only use FileEvent for batching and processing events.
+        // placeholder for future logic
     }
 
     private void checkForRenameOrDelete(String deleteName, DateTimeFormatter formatter) {
-        // Remove all references to EventRecord, only use FileEvent for batching and processing events.
+        // placeholder for future logic
     }
 
     private void log(String message, DateTimeFormatter formatter) {

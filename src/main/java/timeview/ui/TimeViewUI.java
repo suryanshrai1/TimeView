@@ -11,11 +11,15 @@ import javafx.geometry.Insets;
 import java.io.File;
 import java.nio.file.Path;
 import timeview.watcher.DirectoryWatcher;
+import timeview.snapshot.SnapshotManager;
+import java.io.IOException;
 
 public class TimeViewUI {
     private Label folderLabel;
     private TextArea logArea;
     private DirectoryWatcher watcher;
+    private SnapshotManager snapshotManager;
+    private Path watchedFolder;
 
     public void start(Stage primaryStage) {
         primaryStage.setTitle("TimeView");
@@ -44,9 +48,25 @@ public class TimeViewUI {
             folderLabel.setText("Selected: " + selectedDirectory.getAbsolutePath());
             logArea.clear();
             if (watcher != null) watcher.stop();
-            watcher = new DirectoryWatcher(selectedDirectory.toPath(), msg -> {
+            watchedFolder = selectedDirectory.toPath();
+            try {
+                snapshotManager = new SnapshotManager(watchedFolder);
+            } catch (IOException e) {
+                logArea.appendText("Failed to initialize SnapshotManager: " + e.getMessage() + "\n");
+                return;
+            }
+            watcher = new DirectoryWatcher(watchedFolder, msg -> {
                 javafx.application.Platform.runLater(() -> {
                     logArea.appendText(msg + "\n");
+                    // Take snapshot on any change, but skip if .time_machine is involved
+                    if (!msg.contains(".time_machine")) {
+                        try {
+                            snapshotManager.takeSnapshot(watchedFolder);
+                            logArea.appendText("[Snapshot taken]\n");
+                        } catch (IOException ex) {
+                            logArea.appendText("[Snapshot error] " + ex.getMessage() + "\n");
+                        }
+                    }
                 });
             });
             watcher.start();
